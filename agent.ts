@@ -48,7 +48,7 @@ type DecisionResponse = {
     answers?: Record<string, ChoiceAnswer | ScoreAnswer>;
 };
 
-const MODEL_ID = "idea-judge";
+const MODEL_ID = "afanasevmylife/pollinations-idea-judge-agent";
 const REASON_MODEL = "openai-fast";
 const MAX_CHARS = 8000;
 const VERDICTS = ["kill", "fix", "ship"] as const;
@@ -291,21 +291,33 @@ export default async function ideaJudge({
 
     const reasons = await explain(pollinations, idea, verdict, verdictAnswer);
 
+    // The runtime requires a complete Responses-API object as the terminal
+    // response (ids, status, usage); the verdict rides along as an extra key.
     return Response.json(
         {
+            id: `resp_${crypto.randomUUID()}`,
+            object: "response",
+            created_at: Math.floor(Date.now() / 1000),
             model: MODEL_ID,
+            status: "completed",
+            error: null,
+            incomplete_details: null,
             output: [
                 {
+                    id: `msg_${crypto.randomUUID()}`,
                     type: "message",
+                    status: "completed",
                     role: "assistant",
                     content: [
                         {
                             type: "output_text",
                             text: `${verdict.toUpperCase()} - ${reasons}`,
+                            annotations: [],
                         },
                     ],
                 },
             ],
+            usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
             verdict: {
                 result: verdict,
                 confidence: verdictAnswer.confidence,
