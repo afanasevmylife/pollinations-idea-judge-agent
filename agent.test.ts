@@ -21,7 +21,13 @@ function ctx(handlers: Handlers, body: unknown, rawBody?: string) {
     };
 }
 
-const LEGEND = { "0": "none", "1": "low", "2": "some", "3": "high", "4": "max" };
+const LEGEND = {
+    "0": "none",
+    "1": "low",
+    "2": "some",
+    "3": "high",
+    "4": "max",
+};
 
 function scoreAnswer(score: number) {
     return {
@@ -50,7 +56,10 @@ const okExplainer = () =>
     Response.json({ choices: [{ message: { content: "Good because." } }] });
 
 test("ships a strong idea and asks Jev all four questions", async () => {
-    let sent: { state?: { idea?: string }; questions?: Record<string, { type: string }> } = {};
+    let sent: {
+        state?: { idea?: string };
+        questions?: Record<string, { type: string }>;
+    } = {};
     const response = await ideaJudge(
         ctx(
             {
@@ -326,7 +335,13 @@ const JEV_FIXTURE = {
                 "3": "Straightforward",
                 "4": "Trivial with existing tools",
             },
-            probabilities: { "0": 0, "1": 0.2, "2": 0.74, "3": 0.05, "4": 0.01 },
+            probabilities: {
+                "0": 0,
+                "1": 0.2,
+                "2": 0.74,
+                "3": 0.05,
+                "4": 0.01,
+            },
             confidence: 0.77,
         },
     },
@@ -339,7 +354,9 @@ test("live-captured Jev fixture maps to a disclosed, reproducible verdict", asyn
                 "/alpha/decisions": async () => Response.json(JEV_FIXTURE),
                 "/v1/chat/completions": okExplainer,
             },
-            { input: "A blockchain-based loyalty program for neighborhood bakeries" },
+            {
+                input: "A blockchain-based loyalty program for neighborhood bakeries",
+            },
         ),
     );
     assert.equal(response.status, 200);
@@ -410,7 +427,10 @@ test("wrong-shaped legends and missing dimension fields are partials", async () 
     for (const bad of [
         { ...scoreAnswer(2), legend: "abcde" },
         { ...scoreAnswer(2), legend: [null, null, null, null, null] },
-        { ...scoreAnswer(2), legend: { a: "x", b: "x", c: "x", d: "x", e: "x" } },
+        {
+            ...scoreAnswer(2),
+            legend: { a: "x", b: "x", c: "x", d: "x", e: "x" },
+        },
         (() => {
             const a = scoreAnswer(2) as Record<string, unknown>;
             delete a.confidence;

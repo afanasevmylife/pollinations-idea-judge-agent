@@ -17,7 +17,10 @@
  *     dimension is null, "partial": true, composite/agreement become null.
  */
 
-type PollinationsFetch = (path: string, init?: RequestInit) => Promise<Response>;
+type PollinationsFetch = (
+    path: string,
+    init?: RequestInit,
+) => Promise<Response>;
 
 type AgentContext = {
     request: Request;
@@ -84,8 +87,7 @@ const DIMENSION_QUESTIONS: Record<
         ],
     },
     novelty: {
-        instructions:
-            "How differentiated is this from what already exists?",
+        instructions: "How differentiated is this from what already exists?",
         criteria: [
             "pure clone of existing products",
             "marginal variation",
@@ -118,7 +120,11 @@ function truncate(text: string): string {
     return text.length > MAX_CHARS ? `${text.slice(0, MAX_CHARS)}…` : text;
 }
 
-const isFiniteIn = (value: unknown, min: number, max: number): value is number =>
+const isFiniteIn = (
+    value: unknown,
+    min: number,
+    max: number,
+): value is number =>
     typeof value === "number" &&
     Number.isFinite(value) &&
     value >= min &&
@@ -129,9 +135,7 @@ const PROB_SUM_TOLERANCE = 0.01;
 
 function hasExactKeys(value: Record<string, unknown>, keys: string[]): boolean {
     const actual = Object.keys(value);
-    return (
-        actual.length === keys.length && keys.every((k) => k in value)
-    );
+    return actual.length === keys.length && keys.every((k) => k in value);
 }
 
 function validVerdict(answer: unknown): answer is ChoiceAnswer {
@@ -225,11 +229,17 @@ async function askJev(
         throw errorResponse("decision upstream returned invalid JSON", 502);
     }
     if (!parsed || typeof parsed !== "object") {
-        throw errorResponse("decision upstream returned an invalid envelope", 502);
+        throw errorResponse(
+            "decision upstream returned an invalid envelope",
+            502,
+        );
     }
     const answers = parsed.answers;
     if (!answers || !validVerdict(answers.verdict)) {
-        throw errorResponse("decision upstream returned an invalid verdict", 502);
+        throw errorResponse(
+            "decision upstream returned an invalid verdict",
+            502,
+        );
     }
     return answers;
 }
@@ -246,7 +256,8 @@ async function explain(
         (v) => `${v} ${answer.probabilities[v].toFixed(2)}`,
     ).join(", ");
     const dims = DIMENSIONS.map(
-        (d) => `${d} ${dimensions[d] === null ? "unknown" : dimensions[d]?.toFixed(2)}`,
+        (d) =>
+            `${d} ${dimensions[d] === null ? "unknown" : dimensions[d]?.toFixed(2)}`,
     ).join(", ");
     const contextLine = context ? `\nContext: ${truncate(context)}` : "";
     try {
@@ -326,14 +337,12 @@ export default async function ideaJudge({
 
     const composite = partial
         ? null
-        : (DIMENSIONS.map((d) => dimensions[d] as number).reduce(
+        : DIMENSIONS.map((d) => dimensions[d] as number).reduce(
               (a, b) => a + b,
               0,
-          ) /
-              DIMENSIONS.length);
+          ) / DIMENSIONS.length;
     const agreementFlag =
-        composite !== null &&
-        Math.abs(composite - VERDICT_TIER[verdict]) > 0.5;
+        composite !== null && Math.abs(composite - VERDICT_TIER[verdict]) > 0.5;
 
     const reasons = await explain(
         pollinations,
