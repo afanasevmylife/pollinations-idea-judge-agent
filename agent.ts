@@ -124,21 +124,38 @@ const isFiniteIn = (value: unknown, min: number, max: number): value is number =
     value >= min &&
     value <= max;
 
+const PROB_SUM_TOLERANCE = 0.1;
+
 function validVerdict(answer: unknown): answer is ChoiceAnswer {
     const a = answer as ChoiceAnswer | undefined;
     if (!a || a.type !== "choice") return false;
     if (!VERDICTS.includes(a.choice as Verdict)) return false;
     if (!isFiniteIn(a.confidence, 0, 1)) return false;
     const probs = a.probabilities;
-    if (!probs || typeof probs !== "object") return false;
-    return VERDICTS.every((v) => isFiniteIn(probs[v], 0, 1));
+    if (!probs || typeof probs !== "object" || Array.isArray(probs)) {
+        return false;
+    }
+    if (!VERDICTS.every((v) => isFiniteIn(probs[v], 0, 1))) return false;
+    const sum = VERDICTS.reduce((total, v) => total + probs[v], 0);
+    return Math.abs(sum - 1) <= PROB_SUM_TOLERANCE;
 }
 
 function validDimension(answer: unknown): answer is ScoreAnswer {
     const a = answer as ScoreAnswer | undefined;
     if (!a || a.type !== "score") return false;
     if (!isFiniteIn(a.score, 0, SCORE_RUNGS - 1)) return false;
-    return Object.keys(a.legend ?? {}).length === SCORE_RUNGS;
+    if (!isFiniteIn(a.confidence, 0, 1)) return false;
+    const legend = a.legend;
+    if (!legend || typeof legend !== "object" || Array.isArray(legend)) {
+        return false;
+    }
+    const rungs = Array.from({ length: SCORE_RUNGS }, (_, i) => String(i));
+    if (!rungs.every((r) => typeof legend[r] === "string")) return false;
+    const probs = a.probabilities;
+    if (!probs || typeof probs !== "object" || Array.isArray(probs)) {
+        return false;
+    }
+    return rungs.every((r) => isFiniteIn(probs[r], 0, 1));
 }
 
 async function askJev(
@@ -195,6 +212,9 @@ async function askJev(
     } catch {
         throw errorResponse("decision upstream returned invalid JSON", 502);
     }
+    if (!parsed || typeof parsed !== "object") {
+        throw errorResponse("decision upstream returned an invalid envelope", 502);
+    }
     const answers = parsed.answers;
     if (!answers || !validVerdict(answers.verdict)) {
         throw errorResponse("decision upstream returned an invalid verdict", 502);
@@ -205,12 +225,18 @@ async function askJev(
 async function explain(
     pollinations: PollinationsFetch,
     idea: string,
+    context: string,
     verdict: Verdict,
     answer: ChoiceAnswer,
+    dimensions: Record<string, number | null>,
 ): Promise<string> {
     const probs = VERDICTS.map(
         (v) => `${v} ${answer.probabilities[v].toFixed(2)}`,
     ).join(", ");
+    const dims = DIMENSIONS.map(
+        (d) => `${d} ${dimensions[d] === null ? "unknown" : dimensions[d]?.toFixed(2)}`,
+    ).join(", ");
+    const contextLine = context ? `\nContext: ${truncate(context)}` : "";
     try {
         const response = await pollinations("/v1/chat/completions", {
             method: "POST",
@@ -225,7 +251,7 @@ async function explain(
                     },
                     {
                         role: "user",
-                        content: `Idea: ${truncate(idea)}\nVerdict: ${verdict.toUpperCase()} (probabilities: ${probs})`,
+                        content: `Idea: ${truncate(idea)}${contextLine}\nVerdict: ${verdict.toUpperCase()} (probabilities: ${probs})\nDimensions (0-1): ${dims}`,
                     },
                 ],
             }),
@@ -247,7 +273,15 @@ export default async function ideaJudge({
     request,
     pollinations,
 }: AgentContext): Promise<Response> {
-    const body = (await request.json()) as Body;
+    let body: Body;
+    try {
+        body = (await request.json()) as Body;
+    } catch {
+        return errorResponse("request body must be valid JSON", 400);
+    }
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+        return errorResponse("request body must be a JSON object", 400);
+    }
     const idea = textOf(body.input).trim();
     if (!idea) {
         return errorResponse("input must carry the idea text", 400);
@@ -289,7 +323,14 @@ export default async function ideaJudge({
         composite !== null &&
         Math.abs(composite - VERDICT_TIER[verdict]) > 0.5;
 
-    const reasons = await explain(pollinations, idea, verdict, verdictAnswer);
+    const reasons = await explain(
+        pollinations,
+        idea,
+        context,
+        verdict,
+        verdictAnswer,
+        dimensions,
+    );
 
     // The runtime requires a complete Responses-API object as the terminal
     // response (ids, status, usage); the verdict rides along as an extra key.

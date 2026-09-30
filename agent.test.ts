@@ -4,13 +4,16 @@ import ideaJudge from "./agent.ts";
 
 type Handlers = Record<string, (init?: RequestInit) => Promise<Response>>;
 
-function ctx(handlers: Handlers, body: unknown) {
+function ctx(handlers: Handlers, body: unknown, rawBody?: string) {
+    const calls: string[] = [];
     return {
+        calls,
         request: new Request("https://example.com/", {
             method: "POST",
-            body: JSON.stringify(body),
+            body: rawBody ?? JSON.stringify(body),
         }),
         pollinations: async (path: string, init?: RequestInit) => {
+            calls.push(path);
             const handler = handlers[path];
             if (!handler) throw new Error(`unexpected call to ${path}`);
             return handler(init);
@@ -356,4 +359,150 @@ test("live-captured Jev fixture maps to a disclosed, reproducible verdict", asyn
     assert.equal(payload.verdict.composite, composite);
     assert.equal(payload.verdict.agreement_flag, false);
     assert.equal(payload.verdict.partial, false);
+});
+
+test("malformed or non-object request bodies are a 400 with no upstream call", async () => {
+    for (const raw of ["{not json", "null", "[1,2]", '"just a string"']) {
+        const c = ctx({}, undefined, raw);
+        const response = await ideaJudge(c);
+        assert.equal(response.status, 400, raw);
+        assert.deepEqual(c.calls, []);
+    }
+});
+
+test("upstream JSON null or missing answers is a 502", async () => {
+    for (const payload of ["null", "{}", '{"answers": null}', "42"]) {
+        const response = await ideaJudge(
+            ctx(
+                { "/alpha/decisions": async () => new Response(payload) },
+                { input: "idea" },
+            ),
+        );
+        assert.equal(response.status, 502, payload);
+    }
+});
+
+test("zero-sum and overfull verdict probabilities are rejected with 502", async () => {
+    for (const probs of [
+        { kill: 0, fix: 0, ship: 0 },
+        { kill: 1, fix: 1, ship: 1 },
+        { kill: 0.5, fix: 0.2, ship: 0.1 },
+    ]) {
+        const response = await ideaJudge(
+            ctx(
+                {
+                    "/alpha/decisions": async () =>
+                        decisions({
+                            demand: scoreAnswer(2),
+                            feasibility: scoreAnswer(2),
+                            novelty: scoreAnswer(2),
+                            verdict: verdictAnswer("ship", probs),
+                        }),
+                },
+                { input: "idea" },
+            ),
+        );
+        assert.equal(response.status, 502, JSON.stringify(probs));
+    }
+});
+
+test("wrong-shaped legends and missing dimension fields are partials", async () => {
+    for (const bad of [
+        { ...scoreAnswer(2), legend: "abcde" },
+        { ...scoreAnswer(2), legend: [null, null, null, null, null] },
+        { ...scoreAnswer(2), legend: { a: "x", b: "x", c: "x", d: "x", e: "x" } },
+        (() => {
+            const a = scoreAnswer(2) as Record<string, unknown>;
+            delete a.confidence;
+            return a;
+        })(),
+        { ...scoreAnswer(2), probabilities: { "0": 1 } },
+    ]) {
+        const response = await ideaJudge(
+            ctx(
+                {
+                    "/alpha/decisions": async () =>
+                        decisions({
+                            demand: bad,
+                            feasibility: scoreAnswer(2),
+                            novelty: scoreAnswer(2),
+                            verdict: verdictAnswer("fix"),
+                        }),
+                    "/v1/chat/completions": okExplainer,
+                },
+                { input: "idea" },
+            ),
+        );
+        const payload = await response.json();
+        assert.equal(payload.verdict.partial, true, JSON.stringify(bad));
+        assert.equal(payload.verdict.dimensions.demand, null);
+    }
+});
+
+test("error paths never call the reason model", async () => {
+    const c1 = ctx(
+        {
+            "/alpha/decisions": async () => {
+                throw new Error("socket reset");
+            },
+        },
+        { input: "idea" },
+    );
+    assert.equal((await ideaJudge(c1)).status, 502);
+    assert.deepEqual(c1.calls, ["/alpha/decisions"]);
+
+    const c2 = ctx({}, { input: "   " });
+    assert.equal((await ideaJudge(c2)).status, 400);
+    assert.deepEqual(c2.calls, []);
+});
+
+test("a contradictory composite sets agreement_flag true", async () => {
+    const response = await ideaJudge(
+        ctx(
+            {
+                "/alpha/decisions": async () =>
+                    decisions({
+                        demand: scoreAnswer(4),
+                        feasibility: scoreAnswer(4),
+                        novelty: scoreAnswer(4),
+                        verdict: verdictAnswer("kill", {
+                            kill: 0.6,
+                            fix: 0.3,
+                            ship: 0.1,
+                        }),
+                    }),
+                "/v1/chat/completions": okExplainer,
+            },
+            { input: "idea" },
+        ),
+    );
+    const payload = await response.json();
+    assert.equal(payload.verdict.result, "kill");
+    assert.equal(payload.verdict.composite, 1);
+    assert.equal(payload.verdict.agreement_flag, true);
+});
+
+test("explainer context reaches the reason model", async () => {
+    let reasonBody: { messages?: { content?: string }[] } = {};
+    await ideaJudge(
+        ctx(
+            {
+                "/alpha/decisions": async () =>
+                    decisions({
+                        demand: scoreAnswer(2),
+                        feasibility: scoreAnswer(2),
+                        novelty: scoreAnswer(2),
+                        verdict: verdictAnswer("fix"),
+                    }),
+                "/v1/chat/completions": async (init) => {
+                    reasonBody = JSON.parse(init?.body as string);
+                    return okExplainer();
+                },
+            },
+            { input: "idea", metadata: { context: "solo founder" } },
+        ),
+    );
+    const userMessage = reasonBody.messages?.[1]?.content ?? "";
+    assert.match(userMessage, /Context: solo founder/);
+    assert.match(userMessage, /Dimensions \(0-1\): demand 0\.50/);
 });
