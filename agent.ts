@@ -124,7 +124,15 @@ const isFiniteIn = (value: unknown, min: number, max: number): value is number =
     value >= min &&
     value <= max;
 
-const PROB_SUM_TOLERANCE = 0.1;
+// Jev emits two-decimal probabilities; 0.01 covers rounding, nothing more.
+const PROB_SUM_TOLERANCE = 0.01;
+
+function hasExactKeys(value: Record<string, unknown>, keys: string[]): boolean {
+    const actual = Object.keys(value);
+    return (
+        actual.length === keys.length && keys.every((k) => k in value)
+    );
+}
 
 function validVerdict(answer: unknown): answer is ChoiceAnswer {
     const a = answer as ChoiceAnswer | undefined;
@@ -135,6 +143,7 @@ function validVerdict(answer: unknown): answer is ChoiceAnswer {
     if (!probs || typeof probs !== "object" || Array.isArray(probs)) {
         return false;
     }
+    if (!hasExactKeys(probs, [...VERDICTS])) return false;
     if (!VERDICTS.every((v) => isFiniteIn(probs[v], 0, 1))) return false;
     const sum = VERDICTS.reduce((total, v) => total + probs[v], 0);
     return Math.abs(sum - 1) <= PROB_SUM_TOLERANCE;
@@ -155,7 +164,10 @@ function validDimension(answer: unknown): answer is ScoreAnswer {
     if (!probs || typeof probs !== "object" || Array.isArray(probs)) {
         return false;
     }
-    return rungs.every((r) => isFiniteIn(probs[r], 0, 1));
+    if (!hasExactKeys(probs, rungs)) return false;
+    if (!rungs.every((r) => isFiniteIn(probs[r], 0, 1))) return false;
+    const sum = rungs.reduce((total, r) => total + probs[r], 0);
+    return Math.abs(sum - 1) <= PROB_SUM_TOLERANCE;
 }
 
 async function askJev(

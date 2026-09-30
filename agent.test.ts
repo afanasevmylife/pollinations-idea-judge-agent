@@ -506,3 +506,54 @@ test("explainer context reaches the reason model", async () => {
     assert.match(userMessage, /Context: solo founder/);
     assert.match(userMessage, /Dimensions \(0-1\): demand 0\.50/);
 });
+
+test("extra verdict probability keys or loose sums are rejected with 502", async () => {
+    for (const probs of [
+        { kill: 0.1, fix: 0.2, ship: 0.7, unexpected: 0 },
+        { kill: 0.1, fix: 0.2, ship: 0.61 },
+    ]) {
+        const response = await ideaJudge(
+            ctx(
+                {
+                    "/alpha/decisions": async () =>
+                        decisions({
+                            demand: scoreAnswer(2),
+                            feasibility: scoreAnswer(2),
+                            novelty: scoreAnswer(2),
+                            verdict: verdictAnswer("ship", probs),
+                        }),
+                },
+                { input: "idea" },
+            ),
+        );
+        assert.equal(response.status, 502, JSON.stringify(probs));
+    }
+});
+
+test("invalid dimension probability distributions are partials", async () => {
+    for (const probs of [
+        { "0": 0, "1": 0, "2": 0, "3": 0, "4": 0 },
+        { "0": 1, "1": 1, "2": 1, "3": 1, "4": 1 },
+        { "0": 0.2, "1": 0.2, "2": 0.2, "3": 0.2, "4": 0.2, "5": 0 },
+    ]) {
+        const response = await ideaJudge(
+            ctx(
+                {
+                    "/alpha/decisions": async () =>
+                        decisions({
+                            demand: { ...scoreAnswer(2), probabilities: probs },
+                            feasibility: scoreAnswer(2),
+                            novelty: scoreAnswer(2),
+                            verdict: verdictAnswer("fix"),
+                        }),
+                    "/v1/chat/completions": okExplainer,
+                },
+                { input: "idea" },
+            ),
+        );
+        const payload = await response.json();
+        assert.equal(payload.verdict.partial, true, JSON.stringify(probs));
+        assert.equal(payload.verdict.dimensions.demand, null);
+        assert.equal(payload.verdict.composite, null);
+    }
+});
